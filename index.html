@@ -626,27 +626,52 @@ class Zn{constructor(e,r){this.cacheOutcome=he,this.cacheManager=r,this.apiId=e.
       return (v === undefined || v === null) ? "" : v;
     });
   }
+  function excelSerialToISO(n) {
+    var utcDays = Math.floor(n - 25569);
+    var d = new Date(utcDays * 86400 * 1000);
+    return d.getUTCFullYear() + "-" + String(d.getUTCMonth() + 1).padStart(2, "0") + "-" + String(d.getUTCDate()).padStart(2, "0");
+  }
+  var DATE_FIELDS = ["dtInicio", "dtConclusao"];
   function rowToRecord(values) {
     var rec = {};
-    COLUMNS.forEach(function (c, i) { rec[c] = (values[i] === "" || values[i] === undefined) ? null : values[i]; });
+    COLUMNS.forEach(function (c, i) {
+      var v = (values[i] === "" || values[i] === undefined) ? null : values[i];
+      if (v !== null && typeof v === "number" && DATE_FIELDS.indexOf(c) !== -1) v = excelSerialToISO(v);
+      rec[c] = v;
+    });
     return rec;
+  }
+
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  async function applyFetchedRows() {
+    var rows = await fetchTableRows();
+    state.actions = rows.map(function (r) {
+      var rec = rowToRecord(r.values);
+      rec.id = String(rec.num);
+      rec._rowIndex = r.index;
+      return rec;
+    });
+    state.loaded = true;
+    renderAll();
   }
 
   async function refreshAllRecords(silent) {
     if (refreshing) return;
     refreshing = true;
     try {
-      var rows = await fetchTableRows();
-      state.actions = rows.map(function (r) {
-        var rec = rowToRecord(r.values);
-        rec.id = String(rec.num);
-        rec._rowIndex = r.index;
-        return rec;
-      });
-      state.loaded = true;
-      renderAll();
+      try {
+        await applyFetchedRows();
+      } catch (e1) {
+        // uma falha isolada (rede instável, limite de requisições do Graph) costuma ser passageira —
+        // tenta mais uma vez antes de sinalizar erro na tela
+        console.error("Falha ao atualizar (1ª tentativa):", e1);
+        await sleep(3000);
+        await applyFetchedRows();
+      }
       setConn(true, "Sincronizado");
     } catch (e) {
+      console.error("Falha ao atualizar (2ª tentativa):", e);
       if (!silent) setConn(false, "Não foi possível atualizar");
     } finally {
       refreshing = false;
@@ -729,20 +754,25 @@ class Zn{constructor(e,r){this.cacheOutcome=he,this.cacheManager=r,this.apiId=e.
   }
   function diffDays(a, b) {
     if (!a || !b) return null;
-    var da = new Date(a + "T00:00:00");
-    var db_ = new Date(b + "T00:00:00");
+    if (typeof a === "number") a = excelSerialToISO(a);
+    if (typeof b === "number") b = excelSerialToISO(b);
+    var da = new Date(String(a) + "T00:00:00");
+    var db_ = new Date(String(b) + "T00:00:00");
     if (isNaN(da) || isNaN(db_)) return null;
     return Math.round((db_ - da) / 86400000);
   }
   function fmtDate(iso) {
-    if (!iso) return "—";
+    if (iso === null || iso === undefined || iso === "") return "—";
+    if (typeof iso === "number") iso = excelSerialToISO(iso);
+    iso = String(iso);
     var parts = iso.split("-");
     if (parts.length !== 3) return iso;
     return parts[2] + "/" + parts[1] + "/" + parts[0].slice(2);
   }
   function monthKey(iso) {
     if (!iso) return null;
-    return iso.slice(0, 7);
+    if (typeof iso === "number") iso = excelSerialToISO(iso);
+    return String(iso).slice(0, 7);
   }
   function monthLabel(key) {
     var y = key.slice(2, 4), m = parseInt(key.slice(5, 7), 10) - 1;
@@ -787,7 +817,7 @@ class Zn{constructor(e,r){this.cacheOutcome=he,this.cacheManager=r,this.apiId=e.
       }
       return true;
     }).sort(function (a, b) {
-      return (b.updatedAt || "").localeCompare(a.updatedAt || "");
+      return String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
     });
   }
 
@@ -1003,10 +1033,10 @@ class Zn{constructor(e,r){this.cacheOutcome=he,this.cacheManager=r,this.apiId=e.
   }
 
   function renderAll() {
-    renderRows();
-    renderDashboard();
-    refreshFilterOptions();
-    refreshDatalists();
+    try { renderRows(); } catch (e) { console.error("Erro ao renderizar a lista de ações:", e); }
+    try { renderDashboard(); } catch (e) { console.error("Erro ao renderizar o dashboard:", e); }
+    try { refreshFilterOptions(); } catch (e) { console.error("Erro ao atualizar os filtros:", e); }
+    try { refreshDatalists(); } catch (e) { console.error("Erro ao atualizar as listas de sugestão:", e); }
   }
 
   // ---------- tabs ----------
